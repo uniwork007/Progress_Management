@@ -452,6 +452,36 @@ public static class ScenarioRepository
         command.Parameters.AddWithValue(name, value ?? DBNull.Value);
     }
 
+    public static void UpdateTaskDates(string taskId, string kind, string startDate, string endDate)
+    {
+        // ドラッグ操作で日付のみを更新する際に使用。
+        // 依存関係情報は変更しないため、外部キー制約の問題を回避する。
+        EnsureDatabase();
+
+        using var connection = new SqliteConnection($"Data Source={DatabasePath}");
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        var columnPrefix = kind switch
+        {
+            "Baseline" => "baseline",
+            "Revised" => "revised",
+            "Actual" => "actual",
+            "Proposal" => "proposal",
+            _ => "baseline"
+        };
+
+        command.CommandText = $"""
+            UPDATE work_tasks
+            SET {columnPrefix}_start = $start_date, {columnPrefix}_end = $end_date
+            WHERE id = $task_id;
+            """;
+        command.Parameters.AddWithValue("$task_id", taskId);
+        command.Parameters.AddWithValue("$start_date", startDate);
+        command.Parameters.AddWithValue("$end_date", endDate);
+        command.ExecuteNonQuery();
+    }
+
     private static void SaveTaskDependencies(SqliteConnection connection, WorkTaskEditRecord record)
     {
         using (var deleteCommand = connection.CreateCommand())

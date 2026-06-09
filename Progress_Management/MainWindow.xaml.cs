@@ -34,6 +34,17 @@ public sealed partial class MainWindow : Window
     private bool _isBinding;
     // 全タスク表示かどうかのフラグ
     private bool _isShowingAllTasks;
+    
+    // ドラッグ機能用フィールド
+    private Border? _draggedBar;
+    private Canvas? _draggedOnCanvas;
+    private double _dragStartX;
+    private double _dragStartY;
+    private (DateTime Start, DateTime End)? _dragExtent;
+    private double _dragUnitWidth;
+    private int _dragStep;
+    private bool _isDragging; // ドラッグ中かどうかのフラグ
+    private const double DragThreshold = 5.0; // ドラッグと判定する移動距離（ピクセル）
 
     public MainWindow()
     {
@@ -370,6 +381,9 @@ public sealed partial class MainWindow : Window
         };
         border.Tapped += Bar_Tapped;
         border.DoubleTapped += Bar_DoubleTapped;
+        border.PointerPressed += (s, e) => Bar_PointerPressed(s, e, canvas, extent, unitWidth, step);
+        border.PointerMoved += Bar_PointerMoved;
+        border.PointerReleased += Bar_PointerReleased;
 
         Canvas.SetLeft(border, left);
         Canvas.SetTop(border, top);
@@ -378,6 +392,9 @@ public sealed partial class MainWindow : Window
 
     private void Bar_Tapped(object sender, TappedRoutedEventArgs e)
     {
+        // ドラッグ中でない場合のみ、タスク選択処理を実行
+        if (_isDragging) return;
+        
         if (sender is not Border { Tag: ValueTuple<WorkTask, GantBarKind> tag }) return;
         _selectedTask = tag.Item1;
         _selectedKind = KindLabel(tag.Item2);
@@ -395,6 +412,136 @@ public sealed partial class MainWindow : Window
         RenderDetail();
         await OpenTaskEditor(tag.Item1.Id);
         e.Handled = true;
+    }
+
+    private void Bar_PointerPressed(object sender, PointerRoutedEventArgs e, Canvas canvas, (DateTime Start, DateTime End) extent, double unitWidth, int step)
+    {
+        if (sender is not Border border || border.Tag is not ValueTuple<WorkTask, GantBarKind> tag) return;
+        
+        _draggedBar = border;
+        _draggedOnCanvas = canvas;
+        _isDragging = false; // まだドラッグと判定しない
+        var currentPoint = e.GetCurrentPoint(canvas).Position;
+        _dragStartX = currentPoint.X;
+        _dragStartY = currentPoint.Y;
+        _dragExtent = extent;
+        _dragUnitWidth = unitWidth;
+        _dragStep = step;
+        
+        // ポインター キャプチャを開始
+        border.CapturePointer(e.Pointer);
+        e.Handled = true;
+    }
+
+    private void Bar_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (_draggedBar == null || _draggedOnCanvas == null) return;
+        if (sender is not Border border) return;
+
+        var currentPoint = e.GetCurrentPoint(_draggedOnCanvas).Position;
+        var deltaX = Math.Abs(currentPoint.X - _dragStartX);
+        var deltaY = Math.Abs(currentPoint.Y - _dragStartY);
+        var totalDelta = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+
+        // 移動距離がしきい値以上の場合、ドラッグと判定
+        if (totalDelta >= DragThreshold)
+        {
+            _isDragging = true;
+            border.Opacity = 0.7; // ドラッグ中の視覚的フィードバック
+        }
+
+        // ドラッグ中の場合のみ、X軸のみ位置を更新
+        if (_isDragging)
+        {
+            var currentLeft = Canvas.GetLeft(border);
+            var deltaXPixels = currentPoint.X - _dragStartX;
+            Canvas.SetLeft(border, Math.Max(0, currentLeft + deltaXPixels));
+            _dragStartX = currentPoint.X;
+        }
+    }
+
+    private void Bar_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_draggedBar == null || _draggedOnCanvas == null || _dragExtent == null || sender is not Border border) return;
+        if (border.Tag is not ValueTuple<WorkTask, GantBarKind> tag) return;
+
+        try
+        {
+            border.Opacity = 1.0; // 元の透明度に戻す
+            _draggedBar.ReleasePointerCaptures();
+
+            // ドラッグ中の場合のみ日付を更新
+            if (_isDragging)
+            {
+                // 新しい位置からX座標を取得
+                var newLeft = Canvas.GetLeft(border);
+                
+                // X座標から日付を計算（日単位のステップで丸める）
+                var pixelsPerDay = _dragUnitWidth / _dragStep;
+                var daysOffset = Math.Round(newLeft / pixelsPerDay);
+                
+                var task = tag.Item1;
+                var kind = tag.Item2;
+                
+                // 対象の日付範囲を取得
+                string[] targetRange = kind switch
+                {
+                    GantBarKind.Baseline => task.Baseline,
+                    GantBarKind.Revised => task.Revised ?? task.Baseline,
+                    GantBarKind.Actual => task.Actual ?? [],
+                    GantBarKind.Proposal => task.Proposal ?? [],
+                    _ => []
+                };
+
+                if (targetRange != null && targetRange.Length >= 2)
+                {
+                    // 元の開始日を取得
+                    if (DateTime.TryParseExact(targetRange[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startDate))
+                    {
+                        // 新しい開始日を計算
+                        var newStartDate = _dragExtent.Value.Start.AddDays(daysOffset);
+                        var endDate = startDate.AddDays((ParseDate(targetRange[1]) - startDate).TotalDays);
+                        var newEndDate = newStartDate.AddDays((endDate - startDate).TotalDays);
+
+                        // 日付を更新（メモリ上）
+                        switch (kind)
+                        {
+                            case GantBarKind.Baseline:
+                                task.Baseline = new[] { newStartDate.ToString("yyyy-MM-dd"), newEndDate.ToString("yyyy-MM-dd") };
+                                break;
+                            case GantBarKind.Revised:
+                                if (task.Revised != null)
+                                    task.Revised = new[] { newStartDate.ToString("yyyy-MM-dd"), newEndDate.ToString("yyyy-MM-dd") };
+                                break;
+                            case GantBarKind.Actual:
+                                if (task.Actual != null)
+                                    task.Actual = new[] { newStartDate.ToString("yyyy-MM-dd"), newEndDate.ToString("yyyy-MM-dd") };
+                                break;
+                            case GantBarKind.Proposal:
+                                if (task.Proposal != null)
+                                    task.Proposal = new[] { newStartDate.ToString("yyyy-MM-dd"), newEndDate.ToString("yyyy-MM-dd") };
+                                break;
+                        }
+
+                        // DBに日付のみを更新（依存関係は変更しない）
+                        var kindName = kind.ToString();
+                        ScenarioRepository.UpdateTaskDates(task.Id, kindName, 
+                            newStartDate.ToString("yyyy-MM-dd"), 
+                            newEndDate.ToString("yyyy-MM-dd"));
+                        
+                        // チャートを再描画
+                        Render();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _draggedBar = null;
+            _draggedOnCanvas = null;
+            _dragExtent = null;
+            _isDragging = false; // ドラッグフラグをリセット
+        }
     }
 
     private async Task OpenTaskEditor(string taskId)
