@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ContentDialog
+    x:Class="Progress_Management.WorkerMaintenanceDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="担当者マスター"
+    CloseButtonText="閉じる">
+
+    <Grid Padding="4" RowDefinitions="Auto,*" RowSpacing="14" Background="#F6F7F4" MinWidth="620" MaxHeight="520">
+        <TextBlock Text="作業に割り当てる担当者を管理します。" Foreground="#657168" TextWrapping="Wrap" />
+
+        <Grid Grid.Row="1" ColumnDefinitions="230,*" ColumnSpacing="12">
+            <Border CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                <Grid RowDefinitions="44,*">
+                    <Border BorderBrush="#D7DDD4" BorderThickness="0,0,0,1">
+                        <Grid Padding="12,0" ColumnDefinitions="*,Auto">
+                            <TextBlock Text="担当者" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <TextBlock x:Name="WorkerCountTextBlock" Grid.Column="1" VerticalAlignment="Center" Foreground="#657168" FontSize="12" />
+                        </Grid>
+                    </Border>
+                    <ListView x:Name="WorkerListView" Grid.Row="1" Padding="8" SelectionChanged="WorkerListView_SelectionChanged" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1" CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White" Padding="14">
+                <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto,*" RowSpacing="10">
+                    <TextBlock Text="編集" FontWeight="SemiBold" />
+
+                    <Grid Grid.Row="1" ColumnDefinitions="96,*" ColumnSpacing="10">
+                        <TextBlock Text="担当者ID" VerticalAlignment="Center" />
+                        <TextBox x:Name="IdTextBox" Grid.Column="1" PlaceholderText="W-004" />
+                    </Grid>
+
+                    <Grid Grid.Row="2" ColumnDefinitions="96,*" ColumnSpacing="10">
+                        <TextBlock Text="名前" VerticalAlignment="Center" />
+                        <TextBox x:Name="NameTextBox" Grid.Column="1" />
+                    </Grid>
+
+                    <Grid Grid.Row="3" ColumnDefinitions="96,*" ColumnSpacing="10">
+                        <TextBlock Text="表示順" VerticalAlignment="Center" />
+                        <NumberBox x:Name="SortOrderNumberBox" Grid.Column="1" Minimum="0" SpinButtonPlacementMode="Inline" />
+                    </Grid>
+
+                    <StackPanel Grid.Row="4" Orientation="Horizontal" Spacing="8">
+                        <Button Content="新規" Click="NewButton_Click" />
+                        <Button Content="保存" Click="SaveButton_Click" />
+                        <Button Content="削除" Click="DeleteButton_Click" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="MessageTextBlock" Grid.Row="5" Foreground="#C94949" TextWrapping="Wrap" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</ContentDialog>

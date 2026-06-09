@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Progress_Management.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Progress_Management"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Progress_Management">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid RowDefinitions="Auto,Auto,Auto,*" Padding="18" RowSpacing="12" Background="#F6F7F4">
+        <!-- 画面タイトル。操作部とは行を分け、狭い幅でも重ならないようにする。 -->
+        <StackPanel Spacing="2">
+            <TextBlock Text="進捗ガント表示" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="管理単位・表示単位" Foreground="#657168" />
+        </StackPanel>
+
+        <!-- シナリオ、表示視点、時間軸を切り替える操作部。 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12">
+            <StackPanel Spacing="4">
+                <TextBlock Text="シナリオ" FontSize="12" Foreground="#657168" />
+                <ComboBox x:Name="ScenarioComboBox" Width="220" SelectionChanged="ScenarioComboBox_SelectionChanged" />
+            </StackPanel>
+            <StackPanel Spacing="4">
+                <TextBlock Text="チャート" FontSize="12" Foreground="#657168" />
+                <ComboBox x:Name="ViewModeComboBox" Width="140" SelectionChanged="ViewModeComboBox_SelectionChanged" />
+            </StackPanel>
+            <StackPanel Spacing="4">
+                <TextBlock Text="時間軸" FontSize="12" Foreground="#657168" />
+                <ComboBox x:Name="ScaleComboBox" Width="110" SelectionChanged="ScaleComboBox_SelectionChanged" />
+            </StackPanel>
+            <StackPanel Spacing="4">
+                <TextBlock Text="作業ID入力" FontSize="12" Foreground="#657168" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBox x:Name="TaskIdTextBox" Width="130" PlaceholderText="T-100" />
+                    <Button Content="開く" Click="OpenTaskEditorButton_Click" />
+                    <Button Content="新規" Click="NewTaskEditorButton_Click" />
+                    <Button Content="担当者" Click="OpenWorkerMaintenanceButton_Click" />
+                </StackPanel>
+                <TextBlock x:Name="TaskCommandMessageTextBlock" Foreground="#C94949" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- 凡例と、現在シナリオの判定概要。 -->
+        <Grid Grid.Row="2" RowDefinitions="Auto,Auto" RowSpacing="10">
+            <StackPanel Orientation="Horizontal" Spacing="18">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Rectangle Width="16" Height="10" RadiusX="2" RadiusY="2" Fill="#58718D" />
+                    <TextBlock Text="当初予定" Foreground="#657168" FontSize="13" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Rectangle Width="16" Height="10" RadiusX="2" RadiusY="2" Fill="#2F8B72" />
+                    <TextBlock Text="リスケ後予定" Foreground="#657168" FontSize="13" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Rectangle Width="16" Height="10" RadiusX="2" RadiusY="2" Fill="#D3833F" />
+                    <TextBlock Text="実績" Foreground="#657168" FontSize="13" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Rectangle Width="16" Height="10" RadiusX="2" RadiusY="2" Fill="#8B6FBB" />
+                    <TextBlock Text="提案" Foreground="#657168" FontSize="13" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Rectangle Width="16" Height="10" RadiusX="2" RadiusY="2" Fill="#C94949" />
+                    <TextBlock Text="逆転/遅延" Foreground="#657168" FontSize="13" />
+                </StackPanel>
+            </StackPanel>
+
+            <Grid Grid.Row="1" ColumnDefinitions="2*,*,*" ColumnSpacing="10">
+                <Border Padding="12" CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="表示目的" FontSize="12" Foreground="#657168" />
+                        <TextBlock x:Name="PurposeTextBlock" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Padding="12" CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="納期判定" FontSize="12" Foreground="#657168" />
+                        <TextBlock x:Name="DueStatusTextBlock" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="2" Padding="12" CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="再スケ提案" FontSize="12" Foreground="#657168" />
+                        <TextBlock x:Name="ProposalStatusTextBlock" FontWeight="SemiBold" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+
+        <!-- 左から作業一覧、中央のガントチャート、右の選択詳細。 -->
+        <Grid Grid.Row="3" ColumnDefinitions="260,*,300" ColumnSpacing="12">
+            <Border CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                <Grid RowDefinitions="44,*">
+                    <Border BorderBrush="#D7DDD4" BorderThickness="0,0,0,1">
+                        <Grid Padding="12,0" ColumnDefinitions="*,Auto">
+                            <TextBlock Text="作業" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <TextBlock x:Name="TaskCountTextBlock" Grid.Column="1" VerticalAlignment="Center" Foreground="#657168" FontSize="12" />
+                        </Grid>
+                    </Border>
+                    <ListView x:Name="TaskListView" Grid.Row="1" SelectionChanged="TaskListView_SelectionChanged" Padding="8" />
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1" CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="ChartStackPanel" />
+                </ScrollViewer>
+            </Border>
+
+            <Border Grid.Column="2" CornerRadius="8" BorderBrush="#D7DDD4" BorderThickness="1" Background="White">
+                <Grid RowDefinitions="44,*">
+                    <Border BorderBrush="#D7DDD4" BorderThickness="0,0,0,1">
+                        <Grid Padding="12,0" ColumnDefinitions="*,Auto">
+                            <TextBlock Text="詳細" VerticalAlignment="Center" FontWeight="SemiBold" />
+                            <TextBlock x:Name="SelectedKindTextBlock" Grid.Column="1" VerticalAlignment="Center" Foreground="#657168" FontSize="12" />
+                        </Grid>
+                    </Border>
+                    <ScrollViewer Grid.Row="1">
+                        <Grid x:Name="DetailGrid" Padding="12" ColumnDefinitions="96,*" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
