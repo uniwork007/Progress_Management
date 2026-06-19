@@ -30,6 +30,8 @@ public sealed partial class MainWindow : Window
     private string _selectedKind = "作業";
     private ChartViewMode _viewMode = ChartViewMode.Personal;
     private TimeScale _timeScale = TimeScale.Day;
+    // 表示の基準となる年月
+    private DateTime _viewDate;
     // ComboBox初期化中に発生するSelectionChangedで再描画しないためのガード。
     private bool _isBinding;
     // 全タスク表示かどうかのフラグ
@@ -52,6 +54,9 @@ public sealed partial class MainWindow : Window
         _scenarioSet = ScenarioRepository.Load() ?? new ProgressScenarioSet();
         _currentScenario = _scenarioSet.Scenarios.FirstOrDefault() ?? new ProgressScenario { Name = "新規シナリオ", Id = "new" };
         
+        // 初期表示を今月の1日に設定
+        _viewDate = new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1);
+
         if (_scenarioSet.Scenarios.Count == 0)
         {
             _scenarioSet.Scenarios.Add(_currentScenario);
@@ -208,8 +213,11 @@ public sealed partial class MainWindow : Window
         ChartStackPanel.Children.Clear();
         if (_currentScenario.Tasks.Count == 0) return;
 
-        // 表示対象期間は、当初予定・リスケ後予定・実績・提案の全日付から自動算出する。
-        var extent = GetExtent(_currentScenario.Tasks);
+        // 表示対象期間を _viewDate に基づいて設定
+        // 日表示なら1ヶ月、週表示なら3ヶ月、月表示なら12ヶ月を表示
+        int monthsToShow = _timeScale == TimeScale.Day ? 1 : (_timeScale == TimeScale.Week ? 3 : 12);
+        var extent = (Start: _viewDate, End: _viewDate.AddMonths(monthsToShow).AddDays(-1));
+
         var step = ScaleStep();
         var unitWidth = UnitWidth();
         var tickCount = Math.Max(1, (int)Math.Ceiling((extent.End - extent.Start).TotalDays / step) + 1);
@@ -304,6 +312,19 @@ public sealed partial class MainWindow : Window
         return header;
     }
 
+    // 前月・次月への切り替え用メソッド (XAMLのボタンなどから呼び出す)
+    private void MovePrevious_Click(object sender, RoutedEventArgs e)
+    {
+        _viewDate = _viewDate.AddMonths(-1);
+        Render();
+    }
+
+    private void MoveNext_Click(object sender, RoutedEventArgs e)
+    {
+        _viewDate = _viewDate.AddMonths(1);
+        Render();
+    }
+
     private static Border BuildRowLabel(string label, string subLabel)
     {
         var panel = new StackPanel { Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
@@ -359,32 +380,94 @@ public sealed partial class MainWindow : Window
     private void AddBar(Canvas canvas, WorkTask task, GantBarKind kind, string[]? range, string label, double top, string color, (DateTime Start, DateTime End) extent, double unitWidth, int step)
     {
         if (range == null || range.Length < 2) return;
+        if (!DateTime.TryParseExact(range[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var start) ||
+            !DateTime.TryParseExact(range[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var end))
+            return;
 
-        var left = ScaledLeft(extent.Start, range[0], unitWidth, step);
-        var width = ScaledWidth(range, unitWidth, step);
+        // 表示範囲外のバーは描画しない
+        if (end < extent.Start || start > extent.End) return;
+
+        // 表示範囲でクリップする（前月のセグメントが範囲外でも幅だけ広がるのを防ぐ）
+        var clipStart = start < extent.Start ? extent.Start : start;
+        var clipEnd = end > extent.End ? extent.End : end;
+        if (clipStart > clipEnd) return;
+
+        // 指定された種類（当初、リスケ、提案）のみ月またぎの分割を行う
+        bool shouldSplit = kind == GantBarKind.Baseline || kind == GantBarKind.Revised || kind == GantBarKind.Proposal;
+
+        if (!shouldSplit)
+        {
+            DrawBarSegment(canvas, task, kind, clipStart, clipEnd, label, top, color, extent, unitWidth, step, true, true, false);
+            return;
+        }
+
+        DateTime currentStart = clipStart;
+        while (currentStart <= clipEnd)
+        {
+            // 当月最終日を計算
+            DateTime monthEnd = new DateTime(currentStart.Year, currentStart.Month, DateTime.DaysInMonth(currentStart.Year, currentStart.Month));
+            DateTime segmentEnd = monthEnd < clipEnd ? monthEnd : clipEnd;
+            bool isSpanning = segmentEnd < clipEnd;
+
+            // セグメントの描画
+            DrawBarSegment(canvas, task, kind, currentStart, segmentEnd, currentStart == clipStart ? label : "", top, color, extent, unitWidth, step, currentStart == clipStart, !isSpanning, isSpanning);
+
+            if (!isSpanning) break;
+            currentStart = monthEnd.AddDays(1);
+        }
+    }
+
+    private void DrawBarSegment(Canvas canvas, WorkTask task, GantBarKind kind, DateTime start, DateTime end, string label, double top, string color, (DateTime Start, DateTime End) extent, double unitWidth, int step, bool isFirst, bool isLast, bool isSpanning)
+    {
+        var left = ScaledLeft(extent.Start, start, unitWidth, step);
+        var width = ScaledWidth(start, end, unitWidth, step);
         var border = new Border
         {
             Width = width,
             Height = BarHeight,
-            CornerRadius = new CornerRadius(4),
+            CornerRadius = new CornerRadius(isFirst ? 4 : 0, isLast ? 4 : 0, isLast ? 4 : 0, isFirst ? 4 : 0),
             Background = Brush(color),
             BorderBrush = Brush(task.Status == "delay" && (kind == GantBarKind.Actual || kind == GantBarKind.Proposal) ? "#C94949" : "#26352D"),
             BorderThickness = new Thickness(task.Status == "delay" && (kind == GantBarKind.Actual || kind == GantBarKind.Proposal) ? 2 : 1),
-            Child = new TextBlock
+            Tag = (Task: task, Kind: kind, SegmentStart: start)
+        };
+
+        var grid = new Grid();
+        if (!string.IsNullOrEmpty(label))
+        {
+            grid.Children.Add(new TextBlock
             {
                 Text = label,
                 Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 11,
-                Margin = new Thickness(7, 2, 7, 0)
-            },
-            Tag = (Task: task, Kind: kind)
-        };
+                Margin = new Thickness(7, 2, 7, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+        }
+
+        if (isSpanning)
+        {
+            // 次月へ続くアドバイス表示
+            grid.Children.Add(new TextBlock
+            {
+                Text = "▶次月へ",
+                Foreground = new SolidColorBrush(Colors.White),
+                FontSize = 9,
+                FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 4, 1)
+            });
+        }
+        border.Child = grid;
+
         border.Tapped += Bar_Tapped;
         border.DoubleTapped += Bar_DoubleTapped;
         border.PointerPressed += (s, e) => Bar_PointerPressed(s, e, canvas, extent, unitWidth, step);
         border.PointerMoved += Bar_PointerMoved;
         border.PointerReleased += Bar_PointerReleased;
 
+        // 要素をCanvasに追加し、位置を設定（これが抜けていたため表示されなかった）
         Canvas.SetLeft(border, left);
         Canvas.SetTop(border, top);
         canvas.Children.Add(border);
@@ -395,7 +478,7 @@ public sealed partial class MainWindow : Window
         // ドラッグ中でない場合のみ、タスク選択処理を実行
         if (_isDragging) return;
         
-        if (sender is not Border { Tag: ValueTuple<WorkTask, GantBarKind> tag }) return;
+        if (sender is not Border { Tag: ValueTuple<WorkTask, GantBarKind, DateTime> tag }) return;
         _selectedTask = tag.Item1;
         _selectedKind = KindLabel(tag.Item2);
         TaskIdTextBox.Text = tag.Item1.Id;
@@ -405,7 +488,7 @@ public sealed partial class MainWindow : Window
 
     private async void Bar_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        if (sender is not Border { Tag: ValueTuple<WorkTask, GantBarKind> tag }) return;
+        if (sender is not Border { Tag: ValueTuple<WorkTask, GantBarKind, DateTime> tag }) return;
         _selectedTask = tag.Item1;
         _selectedKind = KindLabel(tag.Item2);
         TaskIdTextBox.Text = tag.Item1.Id;
@@ -416,7 +499,7 @@ public sealed partial class MainWindow : Window
 
     private void Bar_PointerPressed(object sender, PointerRoutedEventArgs e, Canvas canvas, (DateTime Start, DateTime End) extent, double unitWidth, int step)
     {
-        if (sender is not Border border || border.Tag is not ValueTuple<WorkTask, GantBarKind> tag) return;
+        if (sender is not Border border || border.Tag is not ValueTuple<WorkTask, GantBarKind, DateTime> tag) return;
         
         _draggedBar = border;
         _draggedOnCanvas = canvas;
@@ -463,7 +546,7 @@ public sealed partial class MainWindow : Window
     private void Bar_PointerReleased(object sender, PointerRoutedEventArgs e)
     {
         if (_draggedBar == null || _draggedOnCanvas == null || _dragExtent == null || sender is not Border border) return;
-        if (border.Tag is not ValueTuple<WorkTask, GantBarKind> tag) return;
+        if (border.Tag is not ValueTuple<WorkTask, GantBarKind, DateTime> tag) return;
 
         try
         {
@@ -482,6 +565,7 @@ public sealed partial class MainWindow : Window
                 
                 var task = tag.Item1;
                 var kind = tag.Item2;
+                var segmentStartOrig = tag.Item3;
                 
                 // 対象の日付範囲を取得
                 string[] targetRange = kind switch
@@ -499,9 +583,13 @@ public sealed partial class MainWindow : Window
                     if (DateTime.TryParseExact(targetRange[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startDate))
                     {
                         // 新しい開始日を計算
-                        var newStartDate = _dragExtent.Value.Start.AddDays(daysOffset);
-                        var endDate = startDate.AddDays((ParseDate(targetRange[1]) - startDate).TotalDays);
-                        var newEndDate = newStartDate.AddDays((endDate - startDate).TotalDays);
+                        var newSegmentStart = _dragExtent.Value.Start.AddDays(daysOffset);
+                        // セグメントが本来のタスク開始日から何日オフセットされていたかを考慮して、タスク全体の新しい開始日を算出
+                        double segmentOffsetDays = (segmentStartOrig - startDate).TotalDays;
+                        var newStartDate = newSegmentStart.AddDays(-segmentOffsetDays);
+                        
+                        var duration = (ParseDate(targetRange[1]) - startDate).TotalDays;
+                        var newEndDate = newStartDate.AddDays(duration);
 
                         // 日付を更新（メモリ上）
                         switch (kind)
@@ -673,6 +761,8 @@ public sealed partial class MainWindow : Window
     {
         // 日付ベースで当初予定を超過している作業に、逆転/遅延の視覚マーカーを置く。
         if (task.Status != "delay" || task.Baseline.Length < 2) return;
+        if (!DateTime.TryParseExact(task.Baseline[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var baseEnd)) return;
+        if (baseEnd < extent.Start || baseEnd > extent.End) return;
         var left = ScaledLeft(extent.Start, task.Baseline[1], unitWidth, step) + unitWidth;
         var line = new Line
         {
@@ -707,6 +797,9 @@ public sealed partial class MainWindow : Window
             var fromRange = fromTask.Actual ?? fromTask.Revised;
             var toRange = task.Proposal ?? task.Revised;
             if (fromRange == null || fromRange.Length < 2 || toRange == null || toRange.Length < 2) continue;
+            if (!DateTime.TryParseExact(fromRange[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var fromEnd)) continue;
+            if (!DateTime.TryParseExact(toRange[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var toStart)) continue;
+            if (fromEnd < extent.Start || toStart > extent.End) continue;
             var startX = ScaledLeft(extent.Start, fromRange[1], unitWidth, step) + unitWidth;
             var endX = ScaledLeft(extent.Start, toRange[0], unitWidth, step);
             
@@ -747,6 +840,9 @@ public sealed partial class MainWindow : Window
         var toRange = task.Proposal ?? task.Revised;
 
         if (fromRange == null || fromRange.Length < 2 || toRange == null || toRange.Length < 2) return;
+        if (!DateTime.TryParseExact(fromRange[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var fromEnd)) return;
+        if (!DateTime.TryParseExact(toRange[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var toStart)) return;
+        if (fromEnd < extent.Start || toStart > extent.End) return;
 
         var startX = ScaledLeft(extent.Start, fromRange[1], unitWidth, step) + unitWidth;
         var endX = ScaledLeft(extent.Start, toRange[0], unitWidth, step);
@@ -1020,13 +1116,24 @@ public sealed partial class MainWindow : Window
         return Math.Max(0, (dt - extentStart).TotalDays / step * unitWidth);
     }
 
+    private static double ScaledLeft(DateTime extentStart, DateTime dt, double unitWidth, int step)
+    {
+        return Math.Max(0, (dt - extentStart).TotalDays / step * unitWidth);
+    }
+
     private static double ScaledWidth(string[] range, double unitWidth, int step)
     {
         if (!DateTime.TryParseExact(range[0], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var start) ||
             !DateTime.TryParseExact(range[1], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var end))
             return 18;
 
-        var days = Math.Max(1, (end - start).TotalDays + 1);
+        var days = Math.Max(1, (end - start).TotalDays);
+        return Math.Max(18, days / step * unitWidth);
+    }
+
+    private static double ScaledWidth(DateTime start, DateTime end, double unitWidth, int step)
+    {
+        var days = Math.Max(1, (end - start).TotalDays);
         return Math.Max(18, days / step * unitWidth);
     }
 

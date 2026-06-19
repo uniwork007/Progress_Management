@@ -32,7 +32,11 @@
             </StackPanel>
             <StackPanel Spacing="4">
                 <TextBlock Text="時間軸" FontSize="12" Foreground="#657168" />
-                <ComboBox x:Name="ScaleComboBox" Width="110" SelectionChanged="ScaleComboBox_SelectionChanged" />
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <ComboBox x:Name="ScaleComboBox" Width="110" SelectionChanged="ScaleComboBox_SelectionChanged" />
+                    <Button Content="◀" Width="40" Click="MovePrevious_Click" ToolTipService.ToolTip="前月" />
+                    <Button Content="▶" Width="40" Click="MoveNext_Click" ToolTipService.ToolTip="次月" />
+                </StackPanel>
             </StackPanel>
             <StackPanel Spacing="4">
                 <TextBlock Text="作業ID入力" FontSize="12" Foreground="#657168" />
