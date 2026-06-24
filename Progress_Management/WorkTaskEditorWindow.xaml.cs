@@ -15,6 +15,17 @@ public sealed partial class WorkTaskEditorWindow : ContentDialog
     private readonly List<LookupItem> _scenarios;
     private readonly List<LookupItem> _workers;
 
+    private static readonly Dictionary<string, string> StatusCodeToDisplay = new()
+    {
+        { "ontrack", "予定通り" },
+        { "delay", "遅延" },
+        { "early", "早期" },
+        { "proposal", "提案" }
+    };
+
+    private static readonly Dictionary<string, string> DisplayToStatusCode = StatusCodeToDisplay
+        .ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
+
     public bool WasSaved { get; private set; }
 
     public string SavedTaskId => TaskIdInput.Text.Trim();
@@ -97,7 +108,7 @@ public sealed partial class WorkTaskEditorWindow : ContentDialog
         ScenarioInput.DisplayMemberPath = nameof(LookupItem.Name);
         WorkerInput.ItemsSource = _workers;
         WorkerInput.DisplayMemberPath = nameof(LookupItem.Name);
-        StatusInput.ItemsSource = new[] { "予定通り", "遅延", "早期", "提案" };
+        StatusInput.ItemsSource = StatusCodeToDisplay.Values.ToList();
 
         var existing = string.IsNullOrWhiteSpace(requestedTaskId)
             ? null
@@ -154,7 +165,8 @@ public sealed partial class WorkTaskEditorWindow : ContentDialog
         LoadDatePickerPair(ProposalStartInput, ProposalStartText, record.ProposalStart);
         LoadDatePickerPair(ProposalEndInput, ProposalEndText, record.ProposalEnd);
 
-        StatusInput.SelectedItem = string.IsNullOrWhiteSpace(record.Status) ? null : record.Status;
+        StatusInput.SelectedItem = string.IsNullOrWhiteSpace(record.Status) ? null :
+            StatusCodeToDisplay.TryGetValue(record.Status, out var display) ? display : null;
         PredecessorTaskIdsInput.Text = string.Join(", ", record.PredecessorTaskIds);
         SuccessorTaskIdsInput.Text = string.Join(", ", record.SuccessorTaskIds);
         SortOrderInput.Value = record.SortOrder > 0 ? record.SortOrder : double.NaN;
@@ -299,6 +311,8 @@ public sealed partial class WorkTaskEditorWindow : ContentDialog
             return false;
         }
 
+        var statusCode = DisplayToStatusCode.TryGetValue(status, out var code) ? code : "";
+
         record = new WorkTaskEditRecord
         {
             Id = id,
@@ -317,7 +331,7 @@ public sealed partial class WorkTaskEditorWindow : ContentDialog
             ActualEnd = ToOptionalStorageDate(ActualEndInput),
             ProposalStart = ToOptionalStorageDate(ProposalStartInput),
             ProposalEnd = ToOptionalStorageDate(ProposalEndInput),
-            Status = status,
+            Status = statusCode,
             PredecessorTaskIds = predecessorTaskIds,
             SuccessorTaskIds = successorTaskIds,
             SortOrder = double.IsNaN(SortOrderInput.Value) ? 0 : Convert.ToInt32(SortOrderInput.Value),
@@ -328,7 +342,8 @@ public sealed partial class WorkTaskEditorWindow : ContentDialog
 
     private bool ValidateRelationIds(string currentTaskId, string scenarioId, IReadOnlyList<string> predecessorTaskIds, IReadOnlyList<string> successorTaskIds)
     {
-        var knownTaskIds = ScenarioRepository.LoadTaskIds(scenarioId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // 全シナリオのタスクIDを既知IDとして使用（task_dependenciesのFKはwork_tasks.idをグローバル参照するため）
+        var knownTaskIds = ScenarioRepository.LoadAllTaskIds().ToHashSet(StringComparer.OrdinalIgnoreCase);
         knownTaskIds.Add(currentTaskId);
 
         if (predecessorTaskIds.Contains(currentTaskId, StringComparer.OrdinalIgnoreCase) ||

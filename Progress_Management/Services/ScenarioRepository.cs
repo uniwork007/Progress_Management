@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using Progress_Management.Models;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 
@@ -232,6 +233,30 @@ public static class ScenarioRepository
         return taskIds;
     }
 
+    public static List<string> LoadAllTaskIds()
+    {
+        EnsureDatabase();
+
+        var taskIds = new List<string>();
+        using var connection = new SqliteConnection($"Data Source={DatabasePath}");
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id
+            FROM work_tasks
+            ORDER BY id;
+            """;
+
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            taskIds.Add(reader.GetString(0));
+        }
+
+        return taskIds;
+    }
+
     public static WorkTaskEditRecord? LoadWorkTaskForEdit(string taskId)
     {
         EnsureDatabase();
@@ -365,6 +390,7 @@ public static class ScenarioRepository
         command.ExecuteNonQuery();
 
         SaveTaskDependencies(connection, record);
+        ClearSurplusRescheduleDates(connection, record);
     }
 
     private static List<WorkTask> LoadTasks(SqliteConnection connection, string scenarioId)
@@ -480,6 +506,186 @@ public static class ScenarioRepository
         command.Parameters.AddWithValue("$start_date", startDate);
         command.Parameters.AddWithValue("$end_date", endDate);
         command.ExecuteNonQuery();
+
+        // ドラッグによる日付更新後、クリア条件を満たす場合は後続/先行タスクのリスケ・提案をクリアする
+        if (kind == "Actual" && !string.IsNullOrWhiteSpace(startDate) && !string.IsNullOrWhiteSpace(endDate))
+        {
+            ClearSurplusForSuccessors(connection, taskId, endDate);
+        }
+        else if (kind == "Baseline" && !string.IsNullOrWhiteSpace(startDate))
+        {
+            ClearSurplusForPredecessors(connection, taskId, startDate);
+        }
+    }
+
+    /// <summary>
+    /// 先行タスクの実績完了日が後続タスクの変更後の当初予定開始日より前になった場合、
+    /// 後続タスクのリスケ後予定・再スケ提案をNULLにクリアする。
+    /// </summary>
+    private static void ClearSurplusRescheduleDates(SqliteConnection connection, WorkTaskEditRecord record)
+    {
+        if (string.IsNullOrWhiteSpace(record.ActualStart) || string.IsNullOrWhiteSpace(record.ActualEnd))
+            return;
+
+        if (!DateTime.TryParseExact(record.ActualEnd, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var predecessorActualEnd))
+            return;
+
+        var successorIds = LoadSuccessors(connection, record.ScenarioId, record.Id);
+        if (successorIds.Count == 0)
+            return;
+
+        foreach (var successorId in successorIds)
+        {
+            using var queryCommand = connection.CreateCommand();
+            queryCommand.CommandText = """
+                SELECT baseline_start
+                FROM work_tasks
+                WHERE id = $id;
+                """;
+            queryCommand.Parameters.AddWithValue("$id", successorId);
+
+            var result = queryCommand.ExecuteScalar();
+            if (result == null || result == DBNull.Value)
+                continue;
+
+            var baselineStartStr = result as string;
+            if (string.IsNullOrWhiteSpace(baselineStartStr))
+                continue;
+
+            if (!DateTime.TryParseExact(baselineStartStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var successorBaselineStart))
+                continue;
+
+            if (predecessorActualEnd < successorBaselineStart)
+            {
+                using var updateCommand = connection.CreateCommand();
+                updateCommand.CommandText = """
+                    UPDATE work_tasks
+                    SET revised_start = NULL, revised_end = NULL,
+                        proposal_start = NULL, proposal_end = NULL
+                    WHERE id = $task_id;
+                    """;
+                updateCommand.Parameters.AddWithValue("$task_id", successorId);
+                updateCommand.ExecuteNonQuery();
+            }
+        }
+    }
+
+    /// <summary>
+    /// ドラッグで先行タスクの実績が更新された際、後続タスクのクリア条件をチェックする。
+    /// </summary>
+    private static void ClearSurplusForSuccessors(SqliteConnection connection, string predecessorTaskId, string actualEndStr)
+    {
+        if (!DateTime.TryParseExact(actualEndStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var predecessorActualEnd))
+            return;
+
+        var scenarioId = GetTaskScenarioId(connection, predecessorTaskId);
+        if (scenarioId == null)
+            return;
+
+        var successorIds = LoadSuccessors(connection, scenarioId, predecessorTaskId);
+        if (successorIds.Count == 0)
+            return;
+
+        foreach (var successorId in successorIds)
+        {
+            using var queryCommand = connection.CreateCommand();
+            queryCommand.CommandText = """
+                SELECT baseline_start
+                FROM work_tasks
+                WHERE id = $id;
+                """;
+            queryCommand.Parameters.AddWithValue("$id", successorId);
+
+            var result = queryCommand.ExecuteScalar();
+            if (result == null || result == DBNull.Value)
+                continue;
+
+            var baselineStartStr = result as string;
+            if (string.IsNullOrWhiteSpace(baselineStartStr))
+                continue;
+
+            if (!DateTime.TryParseExact(baselineStartStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var successorBaselineStart))
+                continue;
+
+            if (predecessorActualEnd < successorBaselineStart)
+            {
+                using var updateCommand = connection.CreateCommand();
+                updateCommand.CommandText = """
+                    UPDATE work_tasks
+                    SET revised_start = NULL, revised_end = NULL,
+                        proposal_start = NULL, proposal_end = NULL
+                    WHERE id = $task_id;
+                    """;
+                updateCommand.Parameters.AddWithValue("$task_id", successorId);
+                updateCommand.ExecuteNonQuery();
+            }
+        }
+    }
+
+    /// <summary>
+    /// ドラッグで後続タスクの当初予定が更新された際、先行タスクの実績終了との比較で
+    /// 自タスクのリスケ・提案をクリアする。
+    /// </summary>
+    private static void ClearSurplusForPredecessors(SqliteConnection connection, string successorTaskId, string baselineStartStr)
+    {
+        if (!DateTime.TryParseExact(baselineStartStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var successorBaselineStart))
+            return;
+
+        var scenarioId = GetTaskScenarioId(connection, successorTaskId);
+        if (scenarioId == null)
+            return;
+
+        var predecessorIds = LoadDependencies(connection, scenarioId, successorTaskId);
+        if (predecessorIds.Count == 0)
+            return;
+
+        foreach (var predecessorId in predecessorIds)
+        {
+            using var queryCommand = connection.CreateCommand();
+            queryCommand.CommandText = """
+                SELECT actual_end
+                FROM work_tasks
+                WHERE id = $id;
+                """;
+            queryCommand.Parameters.AddWithValue("$id", predecessorId);
+
+            var result = queryCommand.ExecuteScalar();
+            if (result == null || result == DBNull.Value)
+                continue;
+
+            var actualEndStr = result as string;
+            if (string.IsNullOrWhiteSpace(actualEndStr))
+                continue;
+
+            if (!DateTime.TryParseExact(actualEndStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var predecessorActualEnd))
+                continue;
+
+            if (predecessorActualEnd < successorBaselineStart)
+            {
+                using var updateCommand = connection.CreateCommand();
+                updateCommand.CommandText = """
+                    UPDATE work_tasks
+                    SET revised_start = NULL, revised_end = NULL,
+                        proposal_start = NULL, proposal_end = NULL
+                    WHERE id = $task_id;
+                    """;
+                updateCommand.Parameters.AddWithValue("$task_id", successorTaskId);
+                updateCommand.ExecuteNonQuery();
+                break;
+            }
+        }
+    }
+
+    private static string? GetTaskScenarioId(SqliteConnection connection, string taskId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT scenario_id
+            FROM work_tasks
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", taskId);
+        return command.ExecuteScalar() as string;
     }
 
     private static void SaveTaskDependencies(SqliteConnection connection, WorkTaskEditRecord record)

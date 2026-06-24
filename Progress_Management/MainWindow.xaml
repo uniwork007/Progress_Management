@@ -30,6 +30,10 @@
                 <TextBlock Text="チャート" FontSize="12" Foreground="#657168" />
                 <ComboBox x:Name="ViewModeComboBox" Width="140" SelectionChanged="ViewModeComboBox_SelectionChanged" />
             </StackPanel>
+            <StackPanel x:Name="WorkerFilterPanel" Spacing="4" Visibility="Collapsed">
+                <TextBlock Text="担当者絞込" FontSize="12" Foreground="#657168" />
+                <ComboBox x:Name="WorkerFilterComboBox" Width="140" SelectionChanged="WorkerFilterComboBox_SelectionChanged" />
+            </StackPanel>
             <StackPanel Spacing="4">
                 <TextBlock Text="時間軸" FontSize="12" Foreground="#657168" />
                 <StackPanel Orientation="Horizontal" Spacing="6">

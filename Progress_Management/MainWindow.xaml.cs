@@ -36,6 +36,8 @@ public sealed partial class MainWindow : Window
     private bool _isBinding;
     // 全タスク表示かどうかのフラグ
     private bool _isShowingAllTasks;
+    // 個人表示時の担当者絞り込み
+    private string? _selectedWorkerFilterId;
     
     // ドラッグ機能用フィールド
     private Border? _draggedBar;
@@ -80,6 +82,14 @@ public sealed partial class MainWindow : Window
         ViewModeComboBox.SelectedIndex = 0;
         ScaleComboBox.ItemsSource = new[] { "日", "週", "月" };
         ScaleComboBox.SelectedIndex = 0;
+        // 担当者フィルターを初期化
+        var workerOptions = ScenarioRepository.LoadWorkerOptions();
+        workerOptions.Insert(0, new LookupItem { Id = "", Name = "すべての担当者" });
+        WorkerFilterComboBox.ItemsSource = workerOptions;
+        WorkerFilterComboBox.DisplayMemberPath = nameof(LookupItem.Name);
+        WorkerFilterComboBox.SelectedIndex = 0;
+        _selectedWorkerFilterId = null;
+        WorkerFilterPanel.Visibility = Visibility.Visible;
         _isBinding = false;
     }
 
@@ -127,6 +137,7 @@ public sealed partial class MainWindow : Window
     {
         if (_isBinding) return;
         _viewMode = ViewModeComboBox.SelectedIndex == 1 ? ChartViewMode.Project : ChartViewMode.Personal;
+        WorkerFilterPanel.Visibility = _viewMode == ChartViewMode.Personal ? Visibility.Visible : Visibility.Collapsed;
         Render();
     }
 
@@ -139,6 +150,13 @@ public sealed partial class MainWindow : Window
             2 => TimeScale.Month,
             _ => TimeScale.Day
         };
+        Render();
+    }
+
+    private void WorkerFilterComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_isBinding) return;
+        _selectedWorkerFilterId = (WorkerFilterComboBox.SelectedItem as LookupItem)?.Id;
         Render();
     }
 
@@ -170,6 +188,16 @@ public sealed partial class MainWindow : Window
     private void Render()
     {
         // シナリオ、表示モード、時間軸を変更したときの再描画入口。
+        WorkerFilterPanel.Visibility = _viewMode == ChartViewMode.Personal ? Visibility.Visible : Visibility.Collapsed;
+        // 個人表示かつ担当者絞り込みが選択されている場合、タスク一覧をフィルタリング
+        var originalTasks = _currentScenario.Tasks;
+        if (_viewMode == ChartViewMode.Personal && !string.IsNullOrWhiteSpace(_selectedWorkerFilterId))
+        {
+            _currentScenario.Tasks = _currentScenario.Tasks
+                .Where(t => t.WorkerId == _selectedWorkerFilterId)
+                .ToList();
+        }
+
         _selectedTask ??= _currentScenario.Tasks.FirstOrDefault();
         PurposeTextBlock.Text = _currentScenario.Purpose;
         DueStatusTextBlock.Text = _currentScenario.DueStatus;
@@ -179,6 +207,9 @@ public sealed partial class MainWindow : Window
         RenderTaskList();
         RenderChart();
         RenderDetail();
+
+        // フィルタリング前のタスク一覧を復元（_currentScenarioのデータ整合性維持）
+        _currentScenario.Tasks = originalTasks;
     }
 
     private void RenderTaskList()
